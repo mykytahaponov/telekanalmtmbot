@@ -7,6 +7,7 @@ from telegram.ext import (
     ContextTypes,
     filters,
 )
+from aiohttp import web
 
 # —————– Налаштування з Environment —————–
 BOT_TOKEN   = os.environ["TELEGRAM_BOT_TOKEN"]
@@ -22,7 +23,7 @@ async def handle_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     msg  = update.message
     logging.info(f"Got update in chat {chat.id}: {msg}")
-    # Пересилаємо в лог-чат
+
     header = f"✉️ Нове від {user.full_name} (@{user.username}) • {msg.date}\n"
     if msg.text:
         await context.bot.send_message(LOG_CHAT_ID, header + msg.text)
@@ -32,19 +33,30 @@ async def handle_all(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await context.bot.send_video(LOG_CHAT_ID, msg.video.file_id, caption=header)
     elif msg.document:
         await context.bot.send_document(LOG_CHAT_ID, msg.document.file_id, caption=header)
-    # Підтвердження в тому ж чаті
+
     await msg.reply_text("Дякуємо, ваше повідомлення отримано!")
 
-# Будуємо Bot
+# Health-check для UptimeRobot
+async def health(request):
+    return web.Response(text="OK", status=200)
+
+# Створюємо Telegram Application
 app = ApplicationBuilder().token(BOT_TOKEN).build()
 app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_all))
 
 if __name__ == "__main__":
-    # Запускаємо вбудований webhook‐сервер
     port = int(os.environ.get("PORT", 10000))
-    app.run_webhook(
+
+    # Додаємо health-check до aiohttp-сервера, який вбудований в PTB
+    webhook_app = app.updater.start_webhook(  # повертає aiohttp.Application
         listen="0.0.0.0",
         port=port,
-        url_path=BOT_TOKEN,  
+        url_path=BOT_TOKEN,
         webhook_url=f"{WEBHOOK_URL}/{BOT_TOKEN}"
     )
+
+    # Додаємо GET '/' маршрут
+    webhook_app.router.add_get("/", health)
+
+    logging.info(f"Starting webhook server on port {port}, path /{BOT_TOKEN}")
+    webhook_app.run_app(host="0.0.0.0", port=port)
