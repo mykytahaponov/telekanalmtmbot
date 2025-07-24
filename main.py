@@ -1,5 +1,6 @@
 import os
 import logging
+import threading
 import requests
 from flask import Flask, request
 
@@ -9,18 +10,29 @@ LOG_CHAT_ID = os.environ["LOG_CHAT_ID"]
 WEBHOOK_URL = os.environ["WEBHOOK_URL"]  # https://telekanalmtmbot.onrender.com
 API_URL     = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Примітивний in-memory трекер стану користувача
-user_states = {}
+# In-memory трекери
+user_states  = {}
+media_groups = {}  # group_id -> list of media items
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
 
-# Health-check
+# Health-check для UptimeRobot
 @app.route("/", methods=["GET"])
 def health():
     return "OK", 200
 
-# Webhook-endpoint
+# Функція, що відправляє зібраний альбом одним викликом
+def flush_media_group(group_id):
+    items = media_groups.pop(group_id, [])
+    if not items:
+        return
+    requests.post(f"{API_URL}/sendMediaGroup", json={
+        "chat_id": LOG_CHAT_ID,
+        "media": items
+    })
+
+# Webhook-ендпойнт
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     data = request.get_json(force=True)
@@ -33,7 +45,7 @@ def webhook():
     chat_id = msg["chat"]["id"]
     text    = msg.get("text", "")
 
-    # 1) /start → клавіатура з трьома кнопками
+    # 1) /start
     if text.strip() == "/start":
         greeting = (
             "Вітаємо в офіційному телеграм-боті телеканалу МТМ!\n"
@@ -97,12 +109,48 @@ def webhook():
         user_states[chat_id] = "error"
         return "OK", 200
 
-    # 5) Обробка будь-якого контенту
+    # Готуються до обробки контенту
     state = user_states.get(chat_id)
     user  = msg.get("from", {})
     header = f"✉️ Нове від {user.get('first_name','')} (@{user.get('username','')})\n"
 
-    # Пересилка в лог-чат
+    # 5) Групування media group
+    if "media_group_id" in msg:
+        grp_id = msg["media_group_id"]
+        buffer = media_groups.setdefault(grp_id, [])
+        # Визначаємо тип медіа
+        if "photo" in msg:
+            file_id = msg["photo"][-1]["file_id"]
+            media_item = {"type": "photo", "media": file_id}
+        elif "video" in msg:
+            file_id = msg["video"]["file_id"]
+            media_item = {"type": "video", "media": file_id}
+        elif "document" in msg:
+            file_id = msg["document"]["file_id"]
+            media_item = {"type": "document", "media": file_id}
+        else:
+            return "OK", 200
+        # Додаємо підпис лише до першого елементу
+        if msg.get("caption") and not buffer:
+            media_item["caption"] = header + msg["caption"]
+        buffer.append(media_item)
+        # Запускаємо таймер на відправку альбому через 1 секунду
+        if len(buffer) == 1:
+            threading.Timer(1.0, flush_media_group, args=(grp_id,)).start()
+        # Відповідь користувачу
+        if state == "petition":
+            reply = "Дякуємо вам за цей важливий крок. Памʼятаємо кожного та кожну."
+        elif state == "error":
+            reply = "Дякуємо за увагу та вашу цікавість!"
+        else:
+            reply = "Прийняли на опрацювання, дякуємо!"
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": reply
+        })
+        return "OK", 200
+
+    # 6) Обробка одиночного контенту
     if "text" in msg:
         content = msg["text"]
         requests.post(f"{API_URL}/sendMessage", json={
@@ -137,7 +185,7 @@ def webhook():
         })
         return "OK", 200
 
-    # 6) Відповідь користувачу за станом
+    # Відповідь користувачу після одиночного файлу
     if state == "news":
         reply = "Прийняли на опрацювання, дякуємо!"
     elif state == "petition":
@@ -151,8 +199,6 @@ def webhook():
         "chat_id": chat_id,
         "text": reply
     })
-
-    # Скидаємо стан після обробки
     user_states.pop(chat_id, None)
 
     return "OK", 200
