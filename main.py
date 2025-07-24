@@ -5,66 +5,87 @@ from flask import Flask, request
 
 # —————– Конфіг з Environment —————–
 BOT_TOKEN   = os.environ["TELEGRAM_BOT_TOKEN"]
-LOG_CHAT_ID = os.environ["LOG_CHAT_ID"]        # рядок, тому без int()
-WEBHOOK_URL = os.environ["WEBHOOK_URL"]        # напр.: https://telekanalmtmbot.onrender.com
+LOG_CHAT_ID = os.environ["LOG_CHAT_ID"]
+WEBHOOK_URL = os.environ["WEBHOOK_URL"]  # https://telekanalmtmbot.onrender.com
 
 API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
-# Логи
 logging.basicConfig(level=logging.INFO)
-
 app = Flask(__name__)
 
-# Health-check для UptimeRobot
+# Health‐check
 @app.route("/", methods=["GET"])
 def health():
     return "OK", 200
 
-# Webhook-endpoint, куди дзвонить Telegram
+# Webhook
 @app.route(f"/{BOT_TOKEN}", methods=["POST"])
 def webhook():
     data = request.get_json(force=True)
     logging.info(f"Incoming update: {data}")
 
-    message = data.get("message") or data.get("edited_message")
-    if not message:
+    msg = data.get("message") or data.get("edited_message")
+    if not msg:
         return "OK", 200
 
-    chat_id = message["chat"]["id"]
-    # Збираємо заголовок для лог-чату
-    user = message.get("from", {})
-    header = f"✉️ Нове від {user.get('first_name','')} (@{user.get('username','')})\n"
+    chat_id = msg["chat"]["id"]
+    text    = msg.get("text", "")
 
-    # 1) Пересилаємо в лог-чат
-    if "text" in message:
-        text = message["text"]
+    # 1) Обробка команди /start
+    if text.strip() == "/start":
+        # Офіційне привітання
+        greeting = (
+            "Вітаємо в офіційному телеграм-боті телеканалу МТМ!\n"
+            "Керуйтесь кнопками нижче ⬇️"
+        )
+        # Формуємо просту клавіатуру (можете змінити під свої пункти меню)
+        keyboard = {
+            "keyboard": [
+                ["📄 Надіслати новину", "ℹ️ Про канал"],
+                ["❓ Допомога"]
+            ],
+            "resize_keyboard": True,
+            "one_time_keyboard": False
+        }
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": greeting,
+            "reply_markup": keyboard
+        })
+        return "OK", 200
+
+    # 2) Інші повідомлення (як раніше)
+    user = msg.get("from", {})
+    header = f"✉️ Нове від {user.get('first_name','')} (@{user.get('username','')})\n"
+    # Пересилка в лог-чат
+    if "text" in msg:
         requests.post(f"{API_URL}/sendMessage", json={
             "chat_id": LOG_CHAT_ID,
-            "text": header + text
+            "text": header + msg["text"]
         })
-    elif "photo" in message:
-        file_id = message["photo"][-1]["file_id"]
+    elif "photo" in msg:
+        file_id = msg["photo"][-1]["file_id"]
         requests.post(f"{API_URL}/sendPhoto", json={
             "chat_id": LOG_CHAT_ID,
             "photo": file_id,
             "caption": header
         })
-    elif "video" in message:
-        file_id = message["video"]["file_id"]
+    elif "video" in msg:
+        file_id = msg["video"]["file_id"]
         requests.post(f"{API_URL}/sendVideo", json={
             "chat_id": LOG_CHAT_ID,
             "video": file_id,
             "caption": header
         })
-    elif "document" in message:
-        file_id = message["document"]["file_id"]
+    elif "document" in msg:
+        file_id = msg["document"]["file_id"]
         requests.post(f"{API_URL}/sendDocument", json={
             "chat_id": LOG_CHAT_ID,
             "document": file_id,
             "caption": header
         })
 
-    # 2) Відповідаємо користувачу
+    # Підтвердження користувачу
     requests.post(f"{API_URL}/sendMessage", json={
         "chat_id": chat_id,
         "text": "Дякуємо, ваше повідомлення отримано!"
@@ -73,11 +94,11 @@ def webhook():
     return "OK", 200
 
 if __name__ == "__main__":
-    # РЕЄСТРАЦІЯ WEBHOOK (докидаємо токен в URL)
-    set_webhook = requests.post(f"{API_URL}/setWebhook", json={
+    # Реєструємо webhook
+    resp = requests.post(f"{API_URL}/setWebhook", json={
         "url": f"{WEBHOOK_URL}/{BOT_TOKEN}"
     }).json()
-    logging.info(f"setWebhook response: {set_webhook}")
+    logging.info(f"setWebhook response: {resp}")
 
     # Запускаємо Flask
     port = int(os.environ.get("PORT", 10000))
