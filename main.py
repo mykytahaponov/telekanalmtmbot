@@ -1,6 +1,7 @@
 import os
 import logging
 import threading
+import re
 import requests
 from flask import Flask, request
 
@@ -45,6 +46,30 @@ def webhook():
     chat_id = msg["chat"]["id"]
     text    = msg.get("text", "")
 
+    # 0) Обробка /reply у лог-чаті
+    if text.startswith("/reply ") and msg.get("reply_to_message"):
+        orig = msg["reply_to_message"].get("text", "")
+        m = re.search(r"ID[: ]+(-?\d+)", orig)
+        if m:
+            user_id = m.group(1)
+            reply_text = text[len("/reply "):]
+            # Відповідаємо користувачу
+            requests.post(f"{API_URL}/sendMessage", json={
+                "chat_id": user_id,
+                "text": reply_text
+            })
+            # Підтвердження у лог-чаті
+            requests.post(f"{API_URL}/sendMessage", json={
+                "chat_id": LOG_CHAT_ID,
+                "text": f"✏️ Відповідь на повідомлення {user_id} надіслано."
+            })
+        else:
+            requests.post(f"{API_URL}/sendMessage", json={
+                "chat_id": LOG_CHAT_ID,
+                "text": "❌ Не вдалося витягти ID користувача з повідомлення."
+            })
+        return "OK", 200
+
     # 1) /start → клавіатура кнопок
     if text.strip() == "/start":
         greeting = (
@@ -69,8 +94,10 @@ def webhook():
 
     # 2) Обробка кнопок
     if text.strip() in ("📄 Надіслати новину", "Надіслати новину"):
-        requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id,
-            "text": "Чекаємо на вашу новину! Вона може містити текст, фото, відео або файл/документ."})
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": "Чекаємо на вашу новину! Вона може містити текст, фото, відео або файл/документ."
+        })
         user_states[chat_id] = "news"
         return "OK", 200
 
@@ -82,7 +109,10 @@ def webhook():
             "Надсилайте нам посилання та супроводжувальну інформацію про Героя або Героїню, "
             "і ми обовʼязково розглянемо її до публікації."
         )
-        requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": petition_text})
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": petition_text
+        })
         user_states[chat_id] = "petition"
         return "OK", 200
 
@@ -91,7 +121,10 @@ def webhook():
             "Надсилайте нам скріншот, опис, таймкод помилки "
             "(якщо це телевізійний матеріал), і ми усунемо всі недоліки."
         )
-        requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": error_prompt})
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": error_prompt
+        })
         user_states[chat_id] = "error"
         return "OK", 200
 
@@ -118,30 +151,58 @@ def webhook():
         if len(buffer) == 1:
             threading.Timer(1.0, flush_media_group, args=(group_id,)).start()
         # Відповідь користувачу
-        reply = {"news": "Прийняли на опрацювання, дякуємо!",
-                 "petition": "Дякуємо вам за цей важливий крок. Памʼятаємо кожного та кожну.",
-                 "error": "Дякуємо за увагу та вашу цікавість!"}.get(state, "Прийняли на опрацювання, дякуємо!")
-        requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": reply})
+        reply = {
+            "news": "Прийняли на опрацювання, дякуємо!",
+            "petition": "Дякуємо вам за цей важливий крок. Памʼятаємо кожного та кожну.",
+            "error": "Дякуємо за увагу та вашу цікавість!"
+        }.get(state, "Прийняли на опрацювання, дякуємо!")
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": reply
+        })
         return "OK", 200
 
     # 4) Одиночні повідомлення
     if "text" in msg:
-        requests.post(f"{API_URL}/sendMessage", json={"chat_id": LOG_CHAT_ID, "text": header + msg["text"]})
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": LOG_CHAT_ID,
+            "text": header + msg["text"]
+        })
     elif "photo" in msg:
-        requests.post(f"{API_URL}/sendPhoto", json={"chat_id": LOG_CHAT_ID, "photo": msg["photo"][-1]["file_id"], "caption": header})
+        requests.post(f"{API_URL}/sendPhoto", json={
+            "chat_id": LOG_CHAT_ID,
+            "photo": msg["photo"][-1]["file_id"],
+            "caption": header
+        })
     elif "video" in msg:
-        requests.post(f"{API_URL}/sendVideo", json={"chat_id": LOG_CHAT_ID, "video": msg["video"]["file_id"], "caption": header})
+        requests.post(f"{API_URL}/sendVideo", json={
+            "chat_id": LOG_CHAT_ID,
+            "video": msg["video"]["file_id"],
+            "caption": header
+        })
     elif "document" in msg:
-        requests.post(f"{API_URL}/sendDocument", json={"chat_id": LOG_CHAT_ID, "document": msg["document"]["file_id"], "caption": header})
+        requests.post(f"{API_URL}/sendDocument", json={
+            "chat_id": LOG_CHAT_ID,
+            "document": msg["document"]["file_id"],
+            "caption": header
+        })
     else:
-        requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": "Будь ласка, скористайтесь кнопками для початку."})
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": chat_id,
+            "text": "Будь ласка, скористайтесь кнопками для початку."
+        })
         return "OK", 200
 
     # 5) Відповідь користувачу
-    reply = {"news": "Прийняли на опрацювання, дякуємо!",
-             "petition": "Дякуємо вам за цей важливий крок. Памʼятаємо кожного та кожну.",
-             "error": "Дякуємо за увагу та вашу цікавість!"}.get(state, "Дякуємо, ваше повідомлення отримано!")
-    requests.post(f"{API_URL}/sendMessage", json={"chat_id": chat_id, "text": reply})
+    reply = {
+        "news": "Прийняли на опрацювання, дякуємо!",
+        "petition": "Дякуємо вам за цей важливий крок. Памʼятаємо кожного та кожну.",
+        "error": "Дякуємо за увагу та вашу цікавість!"
+    }.get(state, "Дякуємо, ваше повідомлення отримано!")
+    requests.post(f"{API_URL}/sendMessage", json={
+        "chat_id": chat_id,
+        "text": reply
+    })
     user_states.pop(chat_id, None)
     return "OK", 200
 
@@ -149,7 +210,7 @@ if __name__ == "__main__":
     # Реєстрація webhook
     resp = requests.post(f"{API_URL}/setWebhook", json={"url": f"{WEBHOOK_URL}/{BOT_TOKEN}"}).json()
     logging.info(f"setWebhook response: {resp}")
-    
+
     # Запуск Flask-сервера
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
