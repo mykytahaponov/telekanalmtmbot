@@ -46,29 +46,27 @@ def webhook():
     chat_id = msg["chat"]["id"]
     text    = msg.get("text", "")
 
-    # 0) Обробка /reply у лог-чаті
-    if text.startswith("/reply ") and msg.get("reply_to_message"):
-        orig = msg["reply_to_message"].get("text", "")
-        m = re.search(r"ID[: ]+(-?\d+)", orig)
-        if m:
-            user_id = m.group(1)
-            reply_text = text[len("/reply "):]
-            # Відповідаємо користувачу
-            requests.post(f"{API_URL}/sendMessage", json={
-                "chat_id": user_id,
-                "text": reply_text
-            })
-            # Підтвердження у лог-чаті
+    # 0) Обробка /reply у лог-чаті або без reply_to_message
+    if text.startswith("/reply "):
+        parts = text.split(' ', 2)
+        if len(parts) < 3:
+            # інструкція по використанню
             requests.post(f"{API_URL}/sendMessage", json={
                 "chat_id": LOG_CHAT_ID,
-                "text": f"✏️ Відповідь на повідомлення ID {user_id} надіслано."
+                "text": "❌ Використання: /reply <user_id> <текст відповіді>"
             })
-        else:
-            # Не вдалося видобути ID
-            requests.post(f"{API_URL}/sendMessage", json={
-                "chat_id": LOG_CHAT_ID,
-                "text": "❌ Не вдалося витягти ID користувача з повідомлення."
-            })
+            return "OK", 200
+        user_id, reply_text = parts[1], parts[2]
+        # Відправляємо відповідь користувачу
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": user_id,
+            "text": reply_text
+        })
+        # Підтвердження у лог-чаті
+        requests.post(f"{API_URL}/sendMessage", json={
+            "chat_id": LOG_CHAT_ID,
+            "text": f"✏️ Відповідь на повідомлення ID {user_id} надіслано."
+        })
         return "OK", 200
 
     # 1) /start → клавіатура кнопок
